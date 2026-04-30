@@ -68,16 +68,23 @@ class RiskConfig:
         "hockey", "tennis", "mma", "boxing", "ufc", "esports",
     })
 
-    # Question-text patterns that signal a sports/uncertain-outcome match.
-    # Bonds are for "is it Tuesday yet?" style markets, NOT "will Liverpool
-    # beat Chelsea?" — even at 0.95, the soccer match has real binary risk.
+    # Sport-specific question patterns. Tightened to AVOID false positives on
+    # political/business markets that legitimately use "win" / "advance" verbs.
+    # We accept slight risk of missing edge sports but no false sports opens.
     BLACKLIST_QUESTION_PATTERNS: tuple = (
-        " vs ", " v ", " beats ", " beat ", " wins ", " win ",
-        " defeats ", " defeat ", " advance", " advances",
+        " vs ", " vs. ",                       # team1 vs team2
+        " beats ", " defeats ",                # sports-specific verbs
         " score ", " scores ", " goal", " goals",
-        "match ", "fight", "boxing", "playoff",
-        "premier league", "la liga", "champions league", "world cup",
-        "nba", "nfl", "mlb", "nhl", "ufc", "f1 ", "formula 1",
+        "match winner", "match result",
+        "fight", "boxing", "knockout",
+        "playoff", "playoffs", "bracket",
+        "premier league", "la liga", "bundesliga", "serie a",
+        "champions league", "europa league", "world cup",
+        "nba ", "nfl ", "mlb ", "nhl ", "ufc ",
+        "f1 ", "formula 1", "grand prix",
+        "tennis", "golf", "cricket", "t20 ", "ipl ",
+        "racing", "horse race",
+        "toss winner", "most sixes", "top batter", "top wicket",
     )
 
     # Resolution-source ambiguity flags (skip if any present in rules)

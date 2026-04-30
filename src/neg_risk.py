@@ -18,6 +18,7 @@ from typing import Iterable
 from .config import RISK
 from . import db
 from .events import emit_position_opened
+from .filters import category_blacklisted
 
 
 log = logging.getLogger("neg-risk")
@@ -39,13 +40,26 @@ def _is_catchall(outcome_text: str) -> bool:
 
 def group_event_outcomes(markets: list[dict]) -> dict[str, list[dict]]:
     """Polymarket returns one binary YES/NO market per candidate, all linked
-    by `eventId` or `groupItemTitle`. We need to cluster them back together.
+    by `eventId`. We cluster them back together — but ONLY for true exclusive
+    multi-outcome events (Polymarket flag `negRisk: true`).
+
+    CRITICAL: without negRisk=true, the markets under one eventId can be
+    independent props (cricket: "Toss winner", "Most sixes", "Top batter")
+    where ALL can resolve YES or ALL can resolve NO. Our arb math breaks.
+    Only negRisk=true events guarantee "exactly one of N candidates wins."
+
+    Also: skip any event where ANY leg fails the sports/uncertainty blacklist.
+    Math holds for sports tournaments in theory, but the user wants no sports.
     """
     by_event: dict[str, list[dict]] = {}
     for m in markets:
-        # Try to find the event grouping key
-        eid = (m.get("eventId") or m.get("event_id")
-               or m.get("groupItemTitle") or m.get("groupSlug"))
+        # Hard requirement: must be a true exclusive multi-outcome event
+        if not m.get("negRisk"):
+            continue
+        # Apply same sports/uncertainty blacklist as bond strategy
+        if category_blacklisted(m):
+            continue
+        eid = m.get("eventId") or m.get("event_id")
         if not eid:
             continue
         if not m.get("active") or m.get("closed"):

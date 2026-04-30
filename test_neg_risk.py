@@ -7,13 +7,14 @@ from src.neg_risk import (
 )
 
 
-def _market(event_id="evt-1", no_price=0.20, question="Will A win?",
-            active=True, closed=False, group_title=""):
+def _market(event_id="evt-1", no_price=0.20, question="Will Candidate A win the primary?",
+            active=True, closed=False, group_title="", negRisk=True):
     end = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat().replace("+00:00", "Z")
     yes_p = round(1.0 - no_price, 4)
     return {
         "id": f"{event_id}-{question[:10]}",
         "eventId": event_id,
+        "negRisk": negRisk,  # MUST be true for arb math to apply
         "question": question,
         "groupItemTitle": group_title or question,
         "outcomePrices": json.dumps([str(yes_p), str(no_price)]),
@@ -123,6 +124,38 @@ def test_skip_oversized_event():
     legs = [_market(event_id="BIG", no_price=0.85, question=f"C{i} wins")
             for i in range(15)]
     assert evaluate_event("BIG", legs) is None
+
+
+def test_skip_when_not_neg_risk_event():
+    """Independent-prop markets (no negRisk flag) must be excluded — these
+    are cricket/sports-style 'multiple yes/no on one match' that break math."""
+    legs = [_market(event_id="CRICKET", no_price=0.50,
+                    question="Toss winner — Nepal", negRisk=False)
+            for _ in range(3)]
+    grouped = group_event_outcomes(legs)
+    # negRisk=false means group_event_outcomes filters them out entirely
+    assert "CRICKET" not in grouped, \
+        f"non-negRisk events must be excluded, got {list(grouped.keys())}"
+
+
+def test_skip_sports_keywords_in_question():
+    """Even with negRisk=true, blacklist sports/match patterns."""
+    legs = [_market(event_id="MATCH", no_price=0.30,
+                    question="Liverpool vs Chelsea — Liverpool wins")
+            for _ in range(3)]
+    grouped = group_event_outcomes(legs)
+    assert "MATCH" not in grouped
+
+
+def test_legitimate_election_passes_filter():
+    """A clean political multi-candidate election should pass."""
+    legs = [_market(event_id="ELECTION", no_price=0.30,
+                    question=f"Will Candidate {chr(65+i)} win the 2026 primary?",
+                    negRisk=True)
+            for i in range(5)]
+    grouped = group_event_outcomes(legs)
+    assert "ELECTION" in grouped
+    assert len(grouped["ELECTION"]) == 5
 
 
 def test_skip_unrealistic_edge():
