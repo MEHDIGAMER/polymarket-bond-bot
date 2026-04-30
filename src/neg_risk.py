@@ -38,18 +38,29 @@ def _is_catchall(outcome_text: str) -> bool:
     return any(pat in t for pat in NONE_OF_ABOVE_PATTERNS)
 
 
-def group_event_outcomes(markets: list[dict]) -> dict[str, list[dict]]:
-    """Polymarket returns one binary YES/NO market per candidate, all linked
-    by `eventId`. We cluster them back together — but ONLY for true exclusive
-    multi-outcome events (Polymarket flag `negRisk: true`).
+def _extract_event_id(market: dict) -> str | None:
+    """Polymarket Gamma nests event metadata in an `events` array.
+    Returns the first event's id, or None if not present.
+    """
+    events = market.get("events")
+    if isinstance(events, list) and events:
+        first = events[0]
+        if isinstance(first, dict):
+            return str(first.get("id") or first.get("ticker") or first.get("slug") or "") or None
+    # Fallback for older API shapes
+    return market.get("eventId") or market.get("event_id")
 
-    CRITICAL: without negRisk=true, the markets under one eventId can be
+
+def group_event_outcomes(markets: list[dict]) -> dict[str, list[dict]]:
+    """Cluster markets by their event. ONLY for true exclusive multi-outcome
+    events (Polymarket flag `negRisk: true`).
+
+    CRITICAL: without negRisk=true, the markets under one event can be
     independent props (cricket: "Toss winner", "Most sixes", "Top batter")
     where ALL can resolve YES or ALL can resolve NO. Our arb math breaks.
     Only negRisk=true events guarantee "exactly one of N candidates wins."
 
-    Also: skip any event where ANY leg fails the sports/uncertainty blacklist.
-    Math holds for sports tournaments in theory, but the user wants no sports.
+    Also skips events where any leg fails the sports/uncertainty blacklist.
     """
     by_event: dict[str, list[dict]] = {}
     for m in markets:
@@ -59,7 +70,7 @@ def group_event_outcomes(markets: list[dict]) -> dict[str, list[dict]]:
         # Apply same sports/uncertainty blacklist as bond strategy
         if category_blacklisted(m):
             continue
-        eid = m.get("eventId") or m.get("event_id")
+        eid = _extract_event_id(m)
         if not eid:
             continue
         if not m.get("active") or m.get("closed"):

@@ -13,8 +13,9 @@ def _market(event_id="evt-1", no_price=0.20, question="Will Candidate A win the 
     yes_p = round(1.0 - no_price, 4)
     return {
         "id": f"{event_id}-{question[:10]}",
-        "eventId": event_id,
-        "negRisk": negRisk,  # MUST be true for arb math to apply
+        # Polymarket nests event metadata in an array — match the real shape
+        "events": [{"id": event_id, "ticker": event_id, "slug": event_id}],
+        "negRisk": negRisk,
         "question": question,
         "groupItemTitle": group_title or question,
         "outcomePrices": json.dumps([str(yes_p), str(no_price)]),
