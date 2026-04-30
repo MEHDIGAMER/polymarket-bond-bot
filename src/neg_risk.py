@@ -91,19 +91,32 @@ def evaluate_event(event_id: str, markets: list[dict]) -> dict | None:
         p = parse_no_price(m)
         if p is None or p <= 0 or p >= 1:
             return None
+        # SAFETY NET 1: skip dead/stale markets where prices collapsed to ~0
+        # or rocketed to ~1 (means already resolved or paused).
+        if p < 0.05 or p > 0.98:
+            return None
         no_prices.append((m, p))
 
+    # Cap event size — N=35 weather markets are valid math but expensive
+    # to deploy across; skip for now and revisit when bankroll grows.
     n = len(no_prices)
+    if n > 12:
+        return None
+
     sum_no = sum(p for _, p in no_prices)
     threshold = (n - 1) * (1 - RISK.NEG_RISK_FEE_BUFFER)
 
     if sum_no >= threshold:
         return None  # No edge
 
-    # Math says profit. Compute edge per dollar.
+    # SAFETY NET 2: cap edge at 50%. Real arb is rarely above 30%; anything
+    # above 50% signals stale/dead market that won't actually settle as expected.
     revenue_at_settlement = n - 1  # in dollars per 1 share each leg
     cost = sum_no
     edge = (revenue_at_settlement - cost) / cost
+    if edge > 0.50:
+        return None
+
     return {
         "event_id": event_id,
         "n_outcomes": n,

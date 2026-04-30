@@ -95,13 +95,43 @@ def test_catchall_detection():
 
 
 def test_edge_calculation_correct():
-    # 4-way, NO = 0.50 each, sum = 2.0, max payout = 3.0
-    # edge = (3.0 - 2.0) / 2.0 = 50%
-    legs = [_market(event_id="E6", no_price=0.50, question=f"C{i} wins")
+    # 4-way, NO = 0.55 each, sum = 2.20, max payout = 3.0
+    # edge = (3.0 - 2.20) / 2.20 = 36.4%  (under 50% cap)
+    legs = [_market(event_id="E6", no_price=0.55, question=f"C{i} wins")
             for i in range(4)]
     opp = evaluate_event("E6", legs)
-    assert opp is not None
-    assert abs(opp["edge_pct"] - 0.50) < 0.001
+    assert opp is not None, "should find arb"
+    assert abs(opp["edge_pct"] - 0.3636) < 0.01
+
+
+def test_skip_dead_market_low_prices():
+    # Stale market: NO prices all collapsed to 0.02 → suspicious, skip
+    legs = [_market(event_id="DEAD", no_price=0.02, question=f"C{i} wins")
+            for i in range(5)]
+    assert evaluate_event("DEAD", legs) is None
+
+
+def test_skip_dead_market_high_prices():
+    # Stale market: NO prices all near 1.0 → likely already resolved
+    legs = [_market(event_id="DEAD2", no_price=0.99, question=f"C{i} wins")
+            for i in range(5)]
+    assert evaluate_event("DEAD2", legs) is None
+
+
+def test_skip_oversized_event():
+    # 15-way event — math holds but too capital-intensive for paper phase
+    legs = [_market(event_id="BIG", no_price=0.85, question=f"C{i} wins")
+            for i in range(15)]
+    assert evaluate_event("BIG", legs) is None
+
+
+def test_skip_unrealistic_edge():
+    # Sum NO = 0.5 in a 5-way → edge = (4 - 0.5) / 0.5 = 700%
+    # Almost certainly stale data, must skip
+    legs = [_market(event_id="STALE", no_price=0.10, question=f"C{i} wins")
+            for i in range(5)]
+    # Each leg passes the 0.05 floor, but edge will be way >50%
+    assert evaluate_event("STALE", legs) is None
 
 
 if __name__ == "__main__":
