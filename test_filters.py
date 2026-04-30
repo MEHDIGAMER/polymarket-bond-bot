@@ -10,12 +10,13 @@ from src.filters import (
 
 
 def _market(**overrides):
-    """Build a synthetic market dict with sensible defaults for a bond candidate."""
-    end = (datetime.now(timezone.utc) + timedelta(hours=72)).isoformat().replace("+00:00", "Z")
+    """Build a synthetic market dict with sensible defaults for a bond candidate.
+    Defaults match the tightened v2 band (0.97-0.99, 1-72h)."""
+    end = (datetime.now(timezone.utc) + timedelta(hours=48)).isoformat().replace("+00:00", "Z")
     base = {
         "id": "test-1",
         "question": "Will the Fed cut rates at the May meeting?",
-        "outcomePrices": json.dumps(["0.95", "0.05"]),
+        "outcomePrices": json.dumps(["0.98", "0.02"]),
         "volume": 200_000,
         "endDate": end,
         "active": True,
@@ -31,7 +32,7 @@ def _market(**overrides):
 
 def test_parse_prices_string():
     p = parse_outcome_prices(_market())
-    assert p == (0.95, 0.05), p
+    assert p == (0.98, 0.02), p
 
 
 def test_parse_prices_list():
@@ -61,14 +62,14 @@ def test_evaluate_buy_yes():
     decision, ctx = evaluate_market(_market())
     assert decision == "BUY-YES", (decision, ctx)
     assert ctx["side"] == "YES"
-    assert ctx["side_price"] == 0.95
+    assert ctx["side_price"] == 0.98
 
 
 def test_evaluate_buy_no():
-    m = _market(outcomePrices=json.dumps(["0.05", "0.95"]))
+    m = _market(outcomePrices=json.dumps(["0.02", "0.98"]))
     decision, ctx = evaluate_market(m)
     assert decision == "BUY-NO", (decision, ctx)
-    assert ctx["side_price"] == 0.95
+    assert ctx["side_price"] == 0.98
 
 
 def test_evaluate_skip_low_volume():
@@ -84,14 +85,16 @@ def test_evaluate_skip_outside_band():
 
 
 def test_evaluate_skip_too_close_to_resolution():
-    end = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    # SAME_DAY mode allows 1h+ now; test with 30 minutes (still too close)
+    end = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
     decision, ctx = evaluate_market(_market(endDate=end))
     assert decision == "SKIP"
     assert "resolution_window" in ctx["reason"]
 
 
 def test_evaluate_skip_too_far_from_resolution():
-    end = (datetime.now(timezone.utc) + timedelta(days=14)).isoformat().replace("+00:00", "Z")
+    # New max is 72h (SAME_DAY) — test with 5 days
+    end = (datetime.now(timezone.utc) + timedelta(days=5)).isoformat().replace("+00:00", "Z")
     decision, ctx = evaluate_market(_market(endDate=end))
     assert decision == "SKIP"
     assert "resolution_window" in ctx["reason"]

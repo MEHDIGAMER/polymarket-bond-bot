@@ -14,6 +14,14 @@ import os as _os
 # is for near-resolved certainty, NOT pre-match favorites — those carry real
 # upset risk and Vegas already prices them efficiently).
 EXPLORE = _os.environ.get("EXPLORE", "true").lower() == "true"
+# SAME_DAY: drop the 24h floor to 1h so we catch markets resolving today.
+# Critical for day-1 math validation. Once validated, set to false.
+SAME_DAY = _os.environ.get("SAME_DAY", "true").lower() == "true"
+
+# Strategy toggles — all three on by default
+STRATEGY_BOND       = _os.environ.get("STRATEGY_BOND",       "true").lower() == "true"
+STRATEGY_NEG_RISK   = _os.environ.get("STRATEGY_NEG_RISK",   "true").lower() == "true"
+STRATEGY_CATALYST   = _os.environ.get("STRATEGY_CATALYST",   "true").lower() == "true"
 
 
 @dataclass(frozen=True)
@@ -24,12 +32,17 @@ class RiskConfig:
     # bond thesis.
     # EXPLORE just widens the lower bound a bit (0.92) to learn which
     # sub-band wins — but never below 0.92 (that's gambling, not bonding).
-    PRICE_MIN: float = 0.92 if EXPLORE else 0.95
+    # Tightened per debate consensus: 0.97-0.99 for max win-rate confidence.
+    PRICE_MIN: float = 0.97
     PRICE_MAX: float = 0.99
-    HOURS_TO_RESOLUTION_MIN: int = 6 if EXPLORE else 24
-    HOURS_TO_RESOLUTION_MAX: int = 168 if EXPLORE else 120  # 7 days vs 5
+    HOURS_TO_RESOLUTION_MIN: int = 1 if SAME_DAY else 24
+    HOURS_TO_RESOLUTION_MAX: int = 72 if EXPLORE else 120
     VOLUME_24H_MIN: float = 25_000.0 if EXPLORE else 50_000.0
     ORDER_BOOK_DEPTH_MIN: float = 2_000.0 if EXPLORE else 5_000.0
+    # Negative-Risk Arb specific
+    NEG_RISK_FEE_BUFFER: float = 0.02  # require 2% edge after fees
+    NEG_RISK_MIN_OUTCOMES: int = 3     # event must have ≥3 candidates
+    NEG_RISK_POSITION_USD: float = 100 # $100 per leg max in paper
 
     # Sizing — paper mode keeps it small so we can hold many positions
     POSITION_FRACTION_MAX: float = 0.01 if EXPLORE else 0.05

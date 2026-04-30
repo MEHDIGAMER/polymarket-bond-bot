@@ -7,8 +7,9 @@ import traceback
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from src.config import BOT
+from src.config import BOT, STRATEGY_BOND, STRATEGY_NEG_RISK, STRATEGY_CATALYST
 from src import db, poly_api, trader, resolver, report, alerts, api
+from src import neg_risk, catalyst
 
 
 # --- logging ---
@@ -66,18 +67,36 @@ def main():
                          f"q={c['question'][:60]!r}")
                 alerts.resolved(c)
 
-            # 2) Scan markets and open new bonds. Paginate to pull ALL active.
+            # 2) Scan markets and run all 3 strategies in sequence.
             markets = poly_api.list_all_active_markets(
                 max_total=BOT.MAX_MARKETS_PER_SCAN, page_size=500,
             )
             log.info(f"fetched {len(markets)} active markets")
-            result = trader.trade_once(markets, bankroll=_bankroll())
-            log.info(f"scan: seen={result['markets_seen']} "
-                     f"candidates={result['candidates']} "
-                     f"opened={len(result['opened'])} "
-                     f"top_skips={sorted(result['skip_counts'].items(), key=lambda x:-x[1])[:3]}")
-            for pos in result['opened']:
-                alerts.fill(pos)
+            br = _bankroll()
+
+            if STRATEGY_BOND:
+                bond = trader.trade_once(markets, bankroll=br)
+                log.info(f"bond: seen={bond['markets_seen']} "
+                         f"cands={bond['candidates']} opened={len(bond['opened'])} "
+                         f"top_skips={sorted(bond['skip_counts'].items(), key=lambda x:-x[1])[:3]}")
+                for pos in bond['opened']:
+                    alerts.fill(pos)
+                br = _bankroll()  # update after fills
+
+            if STRATEGY_NEG_RISK:
+                nr = neg_risk.scan(markets, bankroll=br)
+                log.info(f"neg-risk: events={nr['events_seen']} "
+                         f"opps={nr['opportunities']} opened={len(nr['opened'])}")
+                for pos in nr['opened']:
+                    alerts.fill(pos)
+                br = _bankroll()
+
+            if STRATEGY_CATALYST:
+                cat = catalyst.scan(markets, bankroll=br)
+                log.info(f"catalyst: active={cat['active_catalysts']} "
+                         f"matches={cat['matches']} opened={len(cat['opened'])}")
+                for pos in cat['opened']:
+                    alerts.fill(pos)
 
             # 3) Daily summary (every 24h).
             now = datetime.now(timezone.utc)
