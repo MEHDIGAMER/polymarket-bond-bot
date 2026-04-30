@@ -159,6 +159,21 @@ def test_legitimate_election_passes_filter():
     assert len(grouped["ELECTION"]) == 5
 
 
+def test_skip_soccer_team_fc_questions():
+    """The Newcastle/Brighton leak — 'Will Team FC win on 2026-05-02?'"""
+    legs = [
+        _market(event_id="MATCHDAY1", no_price=0.50,
+                question="Will Newcastle United FC win on 2026-05-02?", negRisk=True),
+        _market(event_id="MATCHDAY1", no_price=0.50,
+                question="Will Brighton & Hove Albion FC win on 2026-05-02?", negRisk=True),
+        _market(event_id="MATCHDAY1", no_price=0.50,
+                question="Will Man Utd win on 2026-05-02?", negRisk=True),
+    ]
+    grouped = group_event_outcomes(legs)
+    assert "MATCHDAY1" not in grouped, \
+        f"soccer matchday must be filtered, got {list(grouped.keys())}"
+
+
 def test_skip_unrealistic_edge():
     # Sum NO = 0.5 in a 5-way → edge = (4 - 0.5) / 0.5 = 700%
     # Almost certainly stale data, must skip

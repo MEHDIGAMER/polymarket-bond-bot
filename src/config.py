@@ -78,13 +78,22 @@ class RiskConfig:
         "match winner", "match result",
         "fight", "boxing", "knockout",
         "playoff", "playoffs", "bracket",
+        # Specific sports/match patterns — caught Premier League leak
+        "win on 20", "win on may", "win on june", "win on july",
+        "win on aug", "win on sep", "win on oct", "win on nov", "win on dec",
+        " fc ", " fc?", " fc.", " afc ", " afc?", " cfc ",
+        # Major leagues + competitions
         "premier league", "la liga", "bundesliga", "serie a",
-        "champions league", "europa league", "world cup",
-        "nba ", "nfl ", "mlb ", "nhl ", "ufc ",
+        "champions league", "europa league", "world cup", "euros",
+        "nba ", "nfl ", "mlb ", "nhl ", "ufc ", "wnba",
         "f1 ", "formula 1", "grand prix",
-        "tennis", "golf", "cricket", "t20 ", "ipl ",
-        "racing", "horse race",
+        "tennis", "golf", "cricket", "t20 ", "ipl ", "rugby",
+        "racing", "horse race", "marathon",
+        # Cricket prop styles that leaked
         "toss winner", "most sixes", "top batter", "top wicket",
+        # Common soccer team suffixes (false positives unlikely on these)
+        " united ", " united?", " united.", " utd ", " utd?",
+        " rangers ", " rovers ", " athletic ",
     )
 
     # Resolution-source ambiguity flags (skip if any present in rules)
