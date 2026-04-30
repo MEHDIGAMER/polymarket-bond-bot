@@ -9,25 +9,30 @@ from dataclasses import dataclass
 
 import os as _os
 
-# EXPLORE mode = paper-only, wider filters, more positions per day so we
-# learn which entry-bucket actually wins. Set EXPLORE=true in .env to enable.
+# EXPLORE mode = paper-only, wider price band for learning which sub-bucket
+# actually wins. Sports always excluded regardless of mode (the bond strategy
+# is for near-resolved certainty, NOT pre-match favorites — those carry real
+# upset risk and Vegas already prices them efficiently).
 EXPLORE = _os.environ.get("EXPLORE", "true").lower() == "true"
 
 
 @dataclass(frozen=True)
 class RiskConfig:
-    # Bond entry filters
-    # In EXPLORE mode: 0.80-0.99 (wide net, lots of paper trades).
-    # In production:   0.93-0.97 (debate-validated whale sweet spot).
-    PRICE_MIN: float = 0.80 if EXPLORE else 0.93
-    PRICE_MAX: float = 0.99 if EXPLORE else 0.97
+    # Bond entry filters — TRUE BOND ZONE only.
+    # 0.95-0.99 is where outcomes are essentially already known and waiting
+    # to settle. Below 0.95 there's real binary risk that doesn't fit the
+    # bond thesis.
+    # EXPLORE just widens the lower bound a bit (0.92) to learn which
+    # sub-band wins — but never below 0.92 (that's gambling, not bonding).
+    PRICE_MIN: float = 0.92 if EXPLORE else 0.95
+    PRICE_MAX: float = 0.99
     HOURS_TO_RESOLUTION_MIN: int = 6 if EXPLORE else 24
     HOURS_TO_RESOLUTION_MAX: int = 168 if EXPLORE else 120  # 7 days vs 5
-    VOLUME_24H_MIN: float = 5_000.0 if EXPLORE else 50_000.0
-    ORDER_BOOK_DEPTH_MIN: float = 1_000.0 if EXPLORE else 5_000.0
+    VOLUME_24H_MIN: float = 25_000.0 if EXPLORE else 50_000.0
+    ORDER_BOOK_DEPTH_MIN: float = 2_000.0 if EXPLORE else 5_000.0
 
-    # Sizing — paper mode keeps it tiny so we can hold 50+ concurrent positions
-    POSITION_FRACTION_MAX: float = 0.01 if EXPLORE else 0.05  # 1% per pos in EXPLORE
+    # Sizing — paper mode keeps it small so we can hold many positions
+    POSITION_FRACTION_MAX: float = 0.01 if EXPLORE else 0.05
     POSITION_DOLLAR_CAP: float = 200.0 if EXPLORE else 2_500.0
     KELLY_FRACTION: float = 0.5  # half-Kelly always
     MAX_CONCURRENT_POSITIONS: int = 200 if EXPLORE else 15
@@ -40,11 +45,27 @@ class RiskConfig:
     # Polygon gas
     GAS_PRICE_CAP_GWEI: int = 100
 
-    # Categories to NEVER trade (doomer / political / ambiguous)
+    # Categories to NEVER trade — doomer + sports + ambiguous.
+    # Sports are excluded because pre-match favorites at 0.95 still have
+    # real upset risk; Vegas prices them efficiently; no edge.
     BLACKLIST_CATEGORIES: frozenset = frozenset({
         "war", "nuclear", "death", "scandal", "celebrity",
         "political-extreme", "doom", "apocalypse",
+        "sports", "soccer", "football", "basketball", "baseball",
+        "hockey", "tennis", "mma", "boxing", "ufc", "esports",
     })
+
+    # Question-text patterns that signal a sports/uncertain-outcome match.
+    # Bonds are for "is it Tuesday yet?" style markets, NOT "will Liverpool
+    # beat Chelsea?" — even at 0.95, the soccer match has real binary risk.
+    BLACKLIST_QUESTION_PATTERNS: tuple = (
+        " vs ", " v ", " beats ", " beat ", " wins ", " win ",
+        " defeats ", " defeat ", " advance", " advances",
+        " score ", " scores ", " goal", " goals",
+        "match ", "fight", "boxing", "playoff",
+        "premier league", "la liga", "champions league", "world cup",
+        "nba", "nfl", "mlb", "nhl", "ufc", "f1 ", "formula 1",
+    )
 
     # Resolution-source ambiguity flags (skip if any present in rules)
     AMBIGUOUS_KEYWORDS: tuple = (
@@ -69,13 +90,14 @@ class BotConfig:
 
 
 def price_bucket(price: float) -> str:
-    """Tag positions with their entry band so we can later compare win rates."""
-    if price < 0.85: return "0.80-0.85"
-    if price < 0.90: return "0.85-0.90"
-    if price < 0.93: return "0.90-0.93"
+    """Tag positions with their entry band so we can later compare win rates.
+    Buckets cover the true bond zone only (0.92-0.99). Anything below isn't
+    bond strategy — it's gambling on inherent uncertainty."""
+    if price < 0.93: return "0.92-0.93"
     if price < 0.95: return "0.93-0.95"
     if price < 0.97: return "0.95-0.97"
-    return "0.97-0.99"
+    if price < 0.98: return "0.97-0.98"
+    return "0.98-0.99"
 
 
 RISK = RiskConfig()

@@ -45,8 +45,21 @@ def has_ambiguous_resolution(market: dict) -> bool:
 def category_blacklisted(market: dict) -> bool:
     cat = (market.get("category") or "").lower()
     tags = " ".join((market.get("tags") or [])).lower()
-    haystack = f"{cat} {tags} {market.get('question', '').lower()}"
-    return any(blk in haystack for blk in RISK.BLACKLIST_CATEGORIES)
+    question = (market.get("question") or "").lower()
+
+    # Category/tag match — broad
+    if any(blk in f"{cat} {tags}" for blk in RISK.BLACKLIST_CATEGORIES):
+        return True
+    # Question-text match — catches sports questions even when category is empty
+    # (Polymarket often leaves category blank for pre-match favorites).
+    if any(pat in question for pat in RISK.BLACKLIST_QUESTION_PATTERNS):
+        return True
+    # Doomer / catastrophic
+    if any(blk in question for blk in {
+        "nuclear", "world war", "apocalypse", "extinction", "asteroid"
+    }):
+        return True
+    return False
 
 
 def evaluate_market(market: dict) -> tuple[str, dict[str, Any]]:
