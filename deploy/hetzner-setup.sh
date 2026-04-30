@@ -1,53 +1,88 @@
 #!/usr/bin/env bash
-# Deploy polymarket-bond-bot on the existing BLAX Hetzner VPS.
+# Deploy polymarket-bond-bot on the BLAX Hetzner VPS.
 #
-# Runs as the `blax` user (NOT root). Uses a user-mode systemd unit and
-# a separate directory so it cannot touch BLAX Flow / blax-proxy / port 8000.
+# Auto-detects root vs non-root and chooses system- or user-mode systemd.
+# Lives in its own directory (/opt/bondbot or ~/polymarket-bond-bot) — no
+# collision with BLAX Flow / blax-proxy.
 #
-# Idempotent — safe to re-run.
+# Idempotent. Safe to re-run.
 #
 # One-liner from your laptop:
-#   ssh -i ~/.ssh/blax_connect_vps blax@204.168.195.17 \
-#     'bash -s' < deploy/hetzner-setup.sh
-#
-# Or from the VPS shell:
-#   curl -fsSL https://raw.githubusercontent.com/MEHDIGAMER/polymarket-bond-bot/main/deploy/hetzner-setup.sh | bash
+#   ssh -i ~/.ssh/blax_connect_vps root@204.168.195.17 \
+#     'curl -fsSL https://raw.githubusercontent.com/MEHDIGAMER/polymarket-bond-bot/main/deploy/hetzner-setup.sh | bash'
 
 set -euo pipefail
 
-readonly BOT_HOME="$HOME/polymarket-bond-bot"
 readonly REPO_URL="https://github.com/MEHDIGAMER/polymarket-bond-bot.git"
 readonly SERVICE_NAME="bondbot"
 
+if [[ $EUID -eq 0 ]]; then
+  IS_ROOT=1
+  BOT_HOME="/opt/bondbot"
+  BOT_USER="bondbot"
+  UNIT_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+  SYSTEMCTL=(systemctl)
+else
+  IS_ROOT=0
+  BOT_HOME="$HOME/polymarket-bond-bot"
+  BOT_USER="$(whoami)"
+  UNIT_PATH="$HOME/.config/systemd/user/$SERVICE_NAME.service"
+  SYSTEMCTL=(systemctl --user)
+fi
+
 echo "=========================================="
-echo "  polymarket-bond-bot — user deploy"
-echo "  user:  $(whoami)"
-echo "  home:  $HOME"
+echo "  polymarket-bond-bot — deploying"
+echo "  mode:  $([[ $IS_ROOT -eq 1 ]] && echo SYSTEM || echo USER)"
+echo "  user:  $BOT_USER"
 echo "  dir:   $BOT_HOME"
 echo "=========================================="
 
-# 1. Ensure prerequisites — Python 3 + git should already be there on a BLAX VPS
+# 1. Prereqs
 for cmd in python3 git; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: $cmd not installed"; exit 1; }
 done
 
-# 2. Clone / pull
+# 2. Service user (root mode only — create dedicated low-priv user)
+if [[ $IS_ROOT -eq 1 ]]; then
+  if ! id -u "$BOT_USER" &>/dev/null; then
+    echo "→ creating service user $BOT_USER"
+    useradd --system --create-home --home-dir "$BOT_HOME" --shell /usr/sbin/nologin "$BOT_USER"
+  fi
+fi
+
+# 3. Clone / pull
 if [[ -d "$BOT_HOME/.git" ]]; then
   echo "→ pulling latest"
-  git -C "$BOT_HOME" fetch origin
-  git -C "$BOT_HOME" reset --hard origin/main
+  if [[ $IS_ROOT -eq 1 ]]; then
+    sudo -u "$BOT_USER" git -C "$BOT_HOME" fetch origin
+    sudo -u "$BOT_USER" git -C "$BOT_HOME" reset --hard origin/main
+  else
+    git -C "$BOT_HOME" fetch origin
+    git -C "$BOT_HOME" reset --hard origin/main
+  fi
 else
   echo "→ cloning $REPO_URL"
-  git clone "$REPO_URL" "$BOT_HOME"
+  if [[ $IS_ROOT -eq 1 ]]; then
+    rm -rf "$BOT_HOME"  # was created by useradd
+    git clone "$REPO_URL" "$BOT_HOME"
+    chown -R "$BOT_USER:$BOT_USER" "$BOT_HOME"
+  else
+    git clone "$REPO_URL" "$BOT_HOME"
+  fi
 fi
 
-# 3. venv (no external deps — stdlib only — but keep venv for hygiene)
+# 4. venv
 if [[ ! -d "$BOT_HOME/venv" ]]; then
   echo "→ creating venv"
-  python3 -m venv "$BOT_HOME/venv"
+  if [[ $IS_ROOT -eq 1 ]]; then
+    sudo -u "$BOT_USER" python3 -m venv "$BOT_HOME/venv" || \
+      apt-get install -yqq python3-venv && sudo -u "$BOT_USER" python3 -m venv "$BOT_HOME/venv"
+  else
+    python3 -m venv "$BOT_HOME/venv"
+  fi
 fi
 
-# 4. .env (only created on first run; subsequent re-runs preserve user's edits)
+# 5. .env (paper-trade defaults; preserve existing edits)
 if [[ ! -f "$BOT_HOME/.env" ]]; then
   echo "→ writing $BOT_HOME/.env (paper-trade defaults)"
   cat > "$BOT_HOME/.env" <<'ENVEOF'
@@ -57,11 +92,17 @@ TG_BOT_TOKEN=
 TG_CHAT_ID=
 ENVEOF
   chmod 600 "$BOT_HOME/.env"
+  if [[ $IS_ROOT -eq 1 ]]; then chown "$BOT_USER:$BOT_USER" "$BOT_HOME/.env"; fi
 fi
 
-# 5. user-systemd unit — lives under ~/.config/systemd/user, no sudo needed
-mkdir -p "$HOME/.config/systemd/user"
-cat > "$HOME/.config/systemd/user/$SERVICE_NAME.service" <<EOF
+# 6. ensure logs/data dirs exist with right ownership
+mkdir -p "$BOT_HOME/logs" "$BOT_HOME/data"
+if [[ $IS_ROOT -eq 1 ]]; then chown -R "$BOT_USER:$BOT_USER" "$BOT_HOME/logs" "$BOT_HOME/data"; fi
+
+# 7. systemd unit
+echo "→ writing $UNIT_PATH"
+mkdir -p "$(dirname "$UNIT_PATH")"
+cat > "$UNIT_PATH" <<EOF
 [Unit]
 Description=Polymarket Bond Bot — paper-first bond strategy trader
 After=network-online.target
@@ -69,6 +110,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+$([[ $IS_ROOT -eq 1 ]] && echo "User=$BOT_USER")
 WorkingDirectory=$BOT_HOME
 EnvironmentFile=$BOT_HOME/.env
 ExecStart=$BOT_HOME/venv/bin/python $BOT_HOME/main.py
@@ -77,45 +119,41 @@ RestartSec=15
 StandardOutput=append:$BOT_HOME/logs/systemd.log
 StandardError=append:$BOT_HOME/logs/systemd.err
 
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$BOT_HOME
+
 [Install]
-WantedBy=default.target
+WantedBy=$([[ $IS_ROOT -eq 1 ]] && echo "multi-user.target" || echo "default.target")
 EOF
 
-# 6. enable lingering so the service runs without an active login session
-#    (this needs sudo once — try it, fall back to "screen" mode if denied)
-if sudo -n loginctl enable-linger "$(whoami)" 2>/dev/null; then
-  echo "→ user lingering enabled"
-elif loginctl show-user "$(whoami)" 2>/dev/null | grep -q "Linger=yes"; then
-  echo "→ user lingering already enabled"
-else
-  echo "⚠ could not enable lingering (no sudo). Service will only run while you have an active SSH session."
-  echo "   To fix: as root, run 'loginctl enable-linger $(whoami)'"
-fi
+# 8. enable + start
+"${SYSTEMCTL[@]}" daemon-reload
+"${SYSTEMCTL[@]}" enable "$SERVICE_NAME"
+"${SYSTEMCTL[@]}" restart "$SERVICE_NAME"
 
-# 7. enable + start the user service
-systemctl --user daemon-reload
-systemctl --user enable "$SERVICE_NAME"
-systemctl --user restart "$SERVICE_NAME"
-
-# 8. sanity check — give the bot a few seconds to spin up
+# 9. health check
 sleep 5
-mkdir -p "$BOT_HOME/logs"
-if systemctl --user is-active --quiet "$SERVICE_NAME"; then
+if "${SYSTEMCTL[@]}" is-active --quiet "$SERVICE_NAME"; then
   echo ""
-  echo "✅ bondbot is RUNNING (mode: PAPER, bankroll: \$10K virtual)"
+  echo "✅ bondbot is RUNNING (mode: PAPER, virtual bankroll: \$10K)"
   echo ""
-  echo "Status:    systemctl --user status $SERVICE_NAME"
-  echo "Live logs: journalctl --user -u $SERVICE_NAME -f"
+  echo "Status:    ${SYSTEMCTL[*]} status $SERVICE_NAME"
+  echo "Live logs: journalctl $([[ $IS_ROOT -eq 1 ]] || echo "--user") -u $SERVICE_NAME -f"
   echo "App log:   tail -f $BOT_HOME/logs/bot.log"
   echo "DB:        sqlite3 $BOT_HOME/data/bot.db"
-  echo "Stop:      systemctl --user stop $SERVICE_NAME"
-  echo "Restart:   systemctl --user restart $SERVICE_NAME"
+  echo "Stop:      ${SYSTEMCTL[*]} stop $SERVICE_NAME"
+  echo "Restart:   ${SYSTEMCTL[*]} restart $SERVICE_NAME"
   echo ""
-  echo "Edit Telegram creds: nano $BOT_HOME/.env  (then: systemctl --user restart $SERVICE_NAME)"
+  echo "Telegram alerts: nano $BOT_HOME/.env  (then ${SYSTEMCTL[*]} restart $SERVICE_NAME)"
   echo "=========================================="
 else
   echo ""
   echo "❌ bondbot failed to start. Last 30 lines:"
-  journalctl --user -u "$SERVICE_NAME" -n 30 --no-pager || tail -n 30 "$BOT_HOME/logs/systemd.err" 2>/dev/null
+  journalctl $([[ $IS_ROOT -eq 1 ]] || echo "--user") -u "$SERVICE_NAME" -n 30 --no-pager 2>/dev/null \
+    || tail -n 30 "$BOT_HOME/logs/systemd.err"
   exit 1
 fi
