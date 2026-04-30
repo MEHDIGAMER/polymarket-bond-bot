@@ -1,127 +1,121 @@
 #!/usr/bin/env bash
-# Deploy polymarket-bond-bot on the existing BLAX Flow Hetzner VPS.
-# Idempotent — safe to re-run. Uses a separate user, dir, and systemd unit
-# so it does NOT touch the BLAX Flow proxy infrastructure.
+# Deploy polymarket-bond-bot on the existing BLAX Hetzner VPS.
 #
-# Run once on the VPS:
-#   bash <(curl -fsSL https://raw.githubusercontent.com/MEHDIGAMER/polymarket-bond-bot/main/deploy/hetzner-setup.sh)
+# Runs as the `blax` user (NOT root). Uses a user-mode systemd unit and
+# a separate directory so it cannot touch BLAX Flow / blax-proxy / port 8000.
 #
-# Or manually after pushing the repo:
-#   ssh root@<hetzner-ip> 'bash -s' < deploy/hetzner-setup.sh
+# Idempotent — safe to re-run.
+#
+# One-liner from your laptop:
+#   ssh -i ~/.ssh/blax_connect_vps blax@204.168.195.17 \
+#     'bash -s' < deploy/hetzner-setup.sh
+#
+# Or from the VPS shell:
+#   curl -fsSL https://raw.githubusercontent.com/MEHDIGAMER/polymarket-bond-bot/main/deploy/hetzner-setup.sh | bash
 
 set -euo pipefail
 
-readonly BOT_USER="bondbot"
-readonly BOT_HOME="/opt/bondbot"
+readonly BOT_HOME="$HOME/polymarket-bond-bot"
 readonly REPO_URL="https://github.com/MEHDIGAMER/polymarket-bond-bot.git"
 readonly SERVICE_NAME="bondbot"
 
-echo "═══════════════════════════════════════════════════"
-echo "  polymarket-bond-bot — Hetzner deploy"
-echo "═══════════════════════════════════════════════════"
+echo "=========================================="
+echo "  polymarket-bond-bot — user deploy"
+echo "  user:  $(whoami)"
+echo "  home:  $HOME"
+echo "  dir:   $BOT_HOME"
+echo "=========================================="
 
-# 1. Sudo guard
-if [[ $EUID -ne 0 ]]; then
-  echo "must run as root (sudo)"
-  exit 1
-fi
+# 1. Ensure prerequisites — Python 3 + git should already be there on a BLAX VPS
+for cmd in python3 git; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: $cmd not installed"; exit 1; }
+done
 
-# 2. System deps (Python 3.11, git)
-echo "→ installing system deps"
-apt-get update -qq
-apt-get install -yqq python3 python3-venv python3-pip git curl
-
-# 3. Service user (won't collide with BLAX Flow's user)
-if ! id -u "$BOT_USER" &>/dev/null; then
-  echo "→ creating user $BOT_USER"
-  useradd --system --create-home --home-dir "$BOT_HOME" \
-          --shell /bin/bash "$BOT_USER"
-fi
-
-# 4. Clone / pull repo
-if [[ -d "$BOT_HOME/repo/.git" ]]; then
+# 2. Clone / pull
+if [[ -d "$BOT_HOME/.git" ]]; then
   echo "→ pulling latest"
-  sudo -u "$BOT_USER" git -C "$BOT_HOME/repo" pull --ff-only
+  git -C "$BOT_HOME" fetch origin
+  git -C "$BOT_HOME" reset --hard origin/main
 else
   echo "→ cloning $REPO_URL"
-  sudo -u "$BOT_USER" git clone "$REPO_URL" "$BOT_HOME/repo"
+  git clone "$REPO_URL" "$BOT_HOME"
 fi
 
-# 5. Python venv
+# 3. venv (no external deps — stdlib only — but keep venv for hygiene)
 if [[ ! -d "$BOT_HOME/venv" ]]; then
   echo "→ creating venv"
-  sudo -u "$BOT_USER" python3 -m venv "$BOT_HOME/venv"
+  python3 -m venv "$BOT_HOME/venv"
 fi
 
-# 6. .env file (created on first run, edit in place)
+# 4. .env (only created on first run; subsequent re-runs preserve user's edits)
 if [[ ! -f "$BOT_HOME/.env" ]]; then
   echo "→ writing $BOT_HOME/.env (paper-trade defaults)"
-  cat > "$BOT_HOME/.env" <<'EOF'
-# polymarket-bond-bot environment
-# Paper-trade mode is the default. Don't change MODE until validation passes.
+  cat > "$BOT_HOME/.env" <<'ENVEOF'
 MODE=PAPER
 PAPER_BANKROLL=10000
-
-# Optional Telegram alerts. Set both to enable.
-# Create a bot via @BotFather on Telegram, get chat ID via @userinfobot.
 TG_BOT_TOKEN=
 TG_CHAT_ID=
-EOF
-  chown "$BOT_USER:$BOT_USER" "$BOT_HOME/.env"
+ENVEOF
   chmod 600 "$BOT_HOME/.env"
 fi
 
-# 7. systemd unit
-echo "→ writing systemd unit"
-cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
+# 5. user-systemd unit — lives under ~/.config/systemd/user, no sudo needed
+mkdir -p "$HOME/.config/systemd/user"
+cat > "$HOME/.config/systemd/user/$SERVICE_NAME.service" <<EOF
 [Unit]
-Description=Polymarket Bond Bot (paper / live trader)
+Description=Polymarket Bond Bot — paper-first bond strategy trader
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=$BOT_USER
-WorkingDirectory=$BOT_HOME/repo
+WorkingDirectory=$BOT_HOME
 EnvironmentFile=$BOT_HOME/.env
-ExecStart=$BOT_HOME/venv/bin/python $BOT_HOME/repo/main.py
+ExecStart=$BOT_HOME/venv/bin/python $BOT_HOME/main.py
 Restart=on-failure
 RestartSec=15
-StandardOutput=append:$BOT_HOME/repo/logs/systemd.log
-StandardError=append:$BOT_HOME/repo/logs/systemd.err
-
-# Hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=$BOT_HOME
+StandardOutput=append:$BOT_HOME/logs/systemd.log
+StandardError=append:$BOT_HOME/logs/systemd.err
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 EOF
 
-# 8. Enable + start
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-systemctl restart "$SERVICE_NAME"
+# 6. enable lingering so the service runs without an active login session
+#    (this needs sudo once — try it, fall back to "screen" mode if denied)
+if sudo -n loginctl enable-linger "$(whoami)" 2>/dev/null; then
+  echo "→ user lingering enabled"
+elif loginctl show-user "$(whoami)" 2>/dev/null | grep -q "Linger=yes"; then
+  echo "→ user lingering already enabled"
+else
+  echo "⚠ could not enable lingering (no sudo). Service will only run while you have an active SSH session."
+  echo "   To fix: as root, run 'loginctl enable-linger $(whoami)'"
+fi
 
-# 9. Sanity check
-sleep 3
-if systemctl is-active --quiet "$SERVICE_NAME"; then
+# 7. enable + start the user service
+systemctl --user daemon-reload
+systemctl --user enable "$SERVICE_NAME"
+systemctl --user restart "$SERVICE_NAME"
+
+# 8. sanity check — give the bot a few seconds to spin up
+sleep 5
+mkdir -p "$BOT_HOME/logs"
+if systemctl --user is-active --quiet "$SERVICE_NAME"; then
   echo ""
-  echo "✅ bondbot is RUNNING"
+  echo "✅ bondbot is RUNNING (mode: PAPER, bankroll: \$10K virtual)"
   echo ""
-  echo "Status:   systemctl status $SERVICE_NAME"
-  echo "Logs:     journalctl -u $SERVICE_NAME -f"
-  echo "DB:       sqlite3 $BOT_HOME/repo/data/bot.db"
-  echo "Stop:     systemctl stop $SERVICE_NAME"
-  echo "Restart:  systemctl restart $SERVICE_NAME"
+  echo "Status:    systemctl --user status $SERVICE_NAME"
+  echo "Live logs: journalctl --user -u $SERVICE_NAME -f"
+  echo "App log:   tail -f $BOT_HOME/logs/bot.log"
+  echo "DB:        sqlite3 $BOT_HOME/data/bot.db"
+  echo "Stop:      systemctl --user stop $SERVICE_NAME"
+  echo "Restart:   systemctl --user restart $SERVICE_NAME"
   echo ""
-  echo "Edit Telegram creds: nano $BOT_HOME/.env  (then systemctl restart $SERVICE_NAME)"
-  echo "═══════════════════════════════════════════════════"
+  echo "Edit Telegram creds: nano $BOT_HOME/.env  (then: systemctl --user restart $SERVICE_NAME)"
+  echo "=========================================="
 else
   echo ""
   echo "❌ bondbot failed to start. Last 30 lines:"
-  journalctl -u "$SERVICE_NAME" -n 30 --no-pager
+  journalctl --user -u "$SERVICE_NAME" -n 30 --no-pager || tail -n 30 "$BOT_HOME/logs/systemd.err" 2>/dev/null
   exit 1
 fi
