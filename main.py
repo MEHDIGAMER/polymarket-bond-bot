@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from src.config import BOT
-from src import db, poly_api, trader, resolver, report, alerts
+from src import db, poly_api, trader, resolver, report, alerts, api
 
 
 # --- logging ---
@@ -47,7 +47,9 @@ def _bankroll() -> float:
 def main():
     log.info(f"starting polymarket-bond-bot mode={BOT.MODE} bankroll=${BOT.PAPER_BANKROLL:,.0f}")
     db.init_db()
-    alerts.send(f"🤖 bond-bot started ({BOT.MODE} mode, ${BOT.PAPER_BANKROLL:,.0f} bankroll)")
+    api_thread = api.serve_in_thread()
+    log.info(f"API listening on 0.0.0.0:{api.API_PORT} (key in data/api.key)")
+    alerts.send(f"🤖 bond-bot started ({BOT.MODE} mode, ${BOT.PAPER_BANKROLL:,.0f} bankroll, API:{api.API_PORT})")
 
     last_daily_report = datetime.now(timezone.utc) - timedelta(hours=24)
 
