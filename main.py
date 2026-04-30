@@ -66,8 +66,10 @@ def main():
                          f"q={c['question'][:60]!r}")
                 alerts.resolved(c)
 
-            # 2) Scan markets and open new bonds.
-            markets = poly_api.list_active_markets(limit=500)
+            # 2) Scan markets and open new bonds. Paginate to pull ALL active.
+            markets = poly_api.list_all_active_markets(
+                max_total=BOT.MAX_MARKETS_PER_SCAN, page_size=500,
+            )
             log.info(f"fetched {len(markets)} active markets")
             result = trader.trade_once(markets, bankroll=_bankroll())
             log.info(f"scan: seen={result['markets_seen']} "

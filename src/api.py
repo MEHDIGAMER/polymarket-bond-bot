@@ -157,6 +157,24 @@ class Handler(BaseHTTPRequestHandler):
                 curve.append({"t": r["closed_at"], "cum_pnl": round(cum, 2)})
             return self._ok({"equity_curve": curve, "starting": BOT.PAPER_BANKROLL})
 
+        if u.path == "/buckets":
+            # Per-entry-band breakdown — which price band wins.
+            with db.connect() as conn:
+                rows = conn.execute("""
+                    SELECT
+                      json_extract(metadata, '$.bucket') AS bucket,
+                      COUNT(*) AS n,
+                      SUM(CASE WHEN status = 'CLOSED-WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS open_count,
+                      SUM(pnl_usd) AS total_pnl,
+                      AVG(CASE WHEN pnl_usd IS NOT NULL THEN pnl_usd / size_usd END) AS avg_return
+                    FROM positions
+                    WHERE json_extract(metadata, '$.bucket') IS NOT NULL
+                    GROUP BY bucket
+                    ORDER BY bucket
+                """).fetchall()
+            return self._ok({"buckets": [_row(r) for r in rows]})
+
         if u.path == "/config":
             # Read-only view of operational parameters
             return self._ok({

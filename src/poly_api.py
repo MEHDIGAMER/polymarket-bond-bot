@@ -47,6 +47,24 @@ def list_active_markets(limit: int = 500, offset: int = 0) -> list[dict]:
     }) or []
 
 
+def list_all_active_markets(max_total: int = 5000, page_size: int = 500) -> list[dict]:
+    """Paginate through Polymarket Gamma to fetch ALL active markets.
+
+    EXPLORE mode pulls thousands so we cast a wide net. Stops at max_total.
+    """
+    out: list[dict] = []
+    offset = 0
+    while len(out) < max_total:
+        page = list_active_markets(limit=page_size, offset=offset)
+        if not page:
+            break
+        out.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return out[:max_total]
+
+
 def get_market(condition_id: str) -> dict | None:
     """Fetch a single market by conditionId — used by resolver."""
     try:

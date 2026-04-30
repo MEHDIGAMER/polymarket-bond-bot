@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from .config import BOT, RISK
+from .config import BOT, RISK, price_bucket
 from . import db
 from .events import emit_position_opened, emit_scan_complete
 from .filters import evaluate_market, kelly_size
@@ -52,6 +52,7 @@ def open_paper_position(*, market: dict, decision: str, ctx: dict[str, Any],
     # Shares = how many YES/NO contracts. Each settles at $1 if our side wins.
     shares = size_usd / ctx["side_price"]
 
+    bucket = price_bucket(ctx["side_price"])
     pos_id = db.insert_position(
         market_id=market_id,
         market_question=ctx["question"],
@@ -62,7 +63,8 @@ def open_paper_position(*, market: dict, decision: str, ctx: dict[str, Any],
         end_date=ctx["end_date"],
         category=cat,
         mode=BOT.MODE,
-        metadata={"decision": decision, "edge": edge, "kelly_size": size_usd},
+        metadata={"decision": decision, "edge": edge,
+                  "kelly_size": size_usd, "bucket": bucket},
     )
     return {
         "id": pos_id,
