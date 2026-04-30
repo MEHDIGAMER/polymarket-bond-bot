@@ -14,6 +14,7 @@ from urllib.parse import urlparse, parse_qs
 
 from . import db
 from .config import BOT, RISK
+from .events import BUS
 
 
 API_PORT = int(os.environ.get("API_PORT", "8001"))
@@ -78,6 +79,14 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/health":
             return self._ok({"status": "ok", "mode": BOT.MODE,
                              "ts": datetime.now(timezone.utc).isoformat()})
+
+        # /stream supports either Bearer header OR ?key= (EventSource can't
+        # send custom headers in browsers, so we accept both)
+        if u.path == "/stream":
+            qs_key = (parse_qs(u.query).get("key") or [""])[0]
+            if not (self._auth_ok() or qs_key == API_KEY):
+                return self._err("unauthorized", 401)
+            return self._serve_stream()
 
         if not self._auth_ok():
             return self._err("unauthorized", 401)
@@ -168,6 +177,30 @@ class Handler(BaseHTTPRequestHandler):
             })
 
         return self._err("not found", 404)
+
+    def _serve_stream(self):
+        """Server-Sent Events stream — pushes bot events live to dashboard."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Accel-Buffering", "no")  # disable nginx buffering
+        self.end_headers()
+        try:
+            # Send a hello so the client immediately knows it's connected
+            self.wfile.write(b": connected\n\n")
+            self.wfile.flush()
+            for evt in BUS.subscribe():
+                payload = json.dumps(evt, default=str)
+                line = f"event: {evt['kind']}\ndata: {payload}\n\n"
+                try:
+                    self.wfile.write(line.encode())
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+        except Exception:
+            return
 
 
 def serve_in_thread() -> threading.Thread:

@@ -4,6 +4,7 @@ from typing import Any
 
 from .config import BOT, RISK
 from . import db
+from .events import emit_position_opened, emit_scan_complete
 from .filters import evaluate_market, kelly_size
 
 
@@ -97,6 +98,7 @@ def trade_once(markets: list[dict], bankroll: float) -> dict[str, Any]:
                                       ctx=ctx, bankroll=bankroll)
             if pos:
                 opened.append(pos)
+                emit_position_opened(pos)
         # Live mode hooks in here in Phase 2.
 
     bankroll_used = sum(p["size_usd"] for p in opened)
@@ -107,9 +109,11 @@ def trade_once(markets: list[dict], bankroll: float) -> dict[str, Any]:
         bankroll_used=bankroll_used,
         metadata={"skip_breakdown": skip_counts, "mode": BOT.MODE},
     )
-    return {
+    result = {
         "markets_seen": len(markets),
         "candidates": len(candidates),
         "opened": opened,
         "skip_counts": skip_counts,
     }
+    emit_scan_complete(result)
+    return result

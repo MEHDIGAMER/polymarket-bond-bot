@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from .config import RISK
 from . import db
+from .events import emit_position_closed
 from .poly_api import get_market, is_resolved
 
 
@@ -24,7 +25,7 @@ def settle_position(pos: dict, exit_price: float, status: str) -> dict:
         pnl_usd=pnl,
         status=status,
     )
-    return {
+    closed = {
         "id": pos["id"],
         "question": pos["market_question"],
         "side": pos["side"],
@@ -33,6 +34,8 @@ def settle_position(pos: dict, exit_price: float, status: str) -> dict:
         "pnl": pnl,
         "status": status,
     }
+    emit_position_closed(closed)
+    return closed
 
 
 def resolve_once() -> list[dict]:
